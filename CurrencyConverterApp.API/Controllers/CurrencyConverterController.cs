@@ -15,8 +15,8 @@ namespace CurrencyConverterApp.API.Controllers
             _currencyConverterService = currencyConverterService;
         }
 
-        [HttpGet("getLatestRate")]
-        public async Task<IActionResult> getLatestRate(string baseCurrency)
+        [HttpGet("getLatestRates")]
+        public async Task<IActionResult> getLatestRates(string baseCurrency)
         {
             try
             {
