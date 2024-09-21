@@ -1,12 +1,9 @@
 ﻿using CurrencyConverterApp.API.Models;
 //using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Caching.Memory;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
+
 using Newtonsoft.Json;
-using Polly;
-using System.Net.Http;
-using System.Text;
+
 
 namespace CurrencyConverterApp.API.Services
 {
@@ -29,7 +26,8 @@ namespace CurrencyConverterApp.API.Services
         {
             try
             {
-                var cacheKey = $"ExcheangeRates-{BaseCurrency}";
+
+                var cacheKey = $"ExchangeRates-{BaseCurrency}";
                 // Try to get the cached rates from in-memory cache
                 if (_cache.TryGetValue(cacheKey, out ExchangeRatesResponse cachedRates))
                 {

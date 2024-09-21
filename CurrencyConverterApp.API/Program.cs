@@ -42,15 +42,32 @@ if (frankfurterApiSetting == null || string.IsNullOrEmpty(frankfurterApiSetting.
 
 //implement httpclient factory and centerlize configration 
 //handle transient failure add rendom to the delay to prevent all retries from happening at the same time 
-builder.Services.AddHttpClient("FrankfurterApi", client =>
-{
-    client.BaseAddress = new Uri(frankfurterApiSetting.BaseUrl);
-    client.DefaultRequestHeaders.Add("accept", "application/json");
+// In Program.cs
+var configuration = builder.Configuration;
+bool usePolly = configuration.GetValue<bool>("UsePolly");
 
-}).AddPolicyHandler(HttpPolicyExtensions
-.HandleTransientHttpError()
-.WaitAndRetryAsync(3, retryAttemp=>
-TimeSpan.FromSeconds(Math.Pow(2,retryAttemp)+new Random().Next(0,1000)/1000.0)));
+if (usePolly)
+{
+    builder.Services.AddHttpClient("FrankfurterApi", client =>
+    {
+        client.BaseAddress = new Uri(frankfurterApiSetting.BaseUrl);
+        client.DefaultRequestHeaders.Add("accept", "application/json");
+    })
+    .AddPolicyHandler(HttpPolicyExtensions
+        .HandleTransientHttpError()
+        .WaitAndRetryAsync(3, retryAttempt =>
+            TimeSpan.FromSeconds(Math.Pow(2, retryAttempt) + new Random().Next(0, 1000) / 1000.0)));
+}
+else
+{
+    // Simple client without retry policy
+    builder.Services.AddHttpClient("FrankfurterApi", client =>
+    {
+        client.BaseAddress = new Uri(frankfurterApiSetting.BaseUrl);
+        client.DefaultRequestHeaders.Add("accept", "application/json");
+    });
+}
+
 
 var app = builder.Build();
 
