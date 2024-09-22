@@ -134,7 +134,7 @@ namespace CurrencyConverterApp.API.test
 
 
 
-    [Fact]
+        [Fact]
         public async Task GetLatestRates_ThrowsHttpRequestException_WhenApiFails()
         {
             // Arrange
@@ -151,6 +151,122 @@ namespace CurrencyConverterApp.API.test
             // Act & Assert
             await Assert.ThrowsAsync<HttpRequestException>(() => _currencyConverterService.GetLatestRates(baseCurrency));
         }
+
+
+        /////////
+        /// 
+        [Fact]
+        public async Task ConvertCurrency_ReturnsConversionResult_WhenSuccessful()
+        {
+            // Arrange
+            var fromCurrency = "GBP";
+            var toCurrency = "USD";
+            var amount = 10.0m;
+
+            var cacheKey = $"CurrencyConversion-{fromCurrency}-{toCurrency}-{amount}";
+            var conversionRatesResponse = new ExchangeRatesResponse
+            {
+                Base = "GBP",
+                Rates = new Dictionary<string, decimal> { { "USD", 13.3071m } }
+            };
+
+            var responseMessage = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(JsonConvert.SerializeObject(conversionRatesResponse))
+            };
+
+            object cacheValue = null; // Simulate cache miss
+            _cacheMock.Setup(x => x.TryGetValue(cacheKey, out cacheValue)).Returns(false); // Simulate cache miss
+
+            // Mock the behavior of CreateEntry (used by Set)
+            var mockCacheEntry = new Mock<ICacheEntry>();
+            _cacheMock
+                .Setup(m => m.CreateEntry(It.IsAny<object>()))
+                .Returns(mockCacheEntry.Object);  // Ensure CreateEntry returns a mock cache entry
+
+            // Mock setting the cache entry's value
+            mockCacheEntry.SetupProperty(c => c.Value);
+            mockCacheEntry.Object.Value = new CurrencyConversionResponse
+            {
+                Success = true,
+                ConvertedAmount = 13.3071m,
+                FromCurrency = fromCurrency,
+                ToCurrency = toCurrency,
+                Amount = amount
+            };
+
+            // Mock HttpClient to return the expected response
+            var mockHttpMessageHandler = new MockHttpMessageHandler(responseMessage);
+            var httpClient = new HttpClient(mockHttpMessageHandler)
+            {
+                BaseAddress = new Uri("https://api.frankfurter.app/")  // Set a BaseAddress for HttpClient
+            };
+            _httpClientFactoryMock.Setup(x => x.CreateClient("FrankfurterApi")).Returns(httpClient);  // Ensure the client is created for the correct named client
+
+            // Act
+            var result = await _currencyConverterService.ConvertCurrency(fromCurrency, toCurrency, amount);
+
+            // Assert
+            Assert.NotNull(result);
+            Assert.True(result.Success);
+            Assert.Equal(13.3071m, result.ConvertedAmount);
+            Assert.Equal(fromCurrency, result.FromCurrency);
+            Assert.Equal(toCurrency, result.ToCurrency);
+            Assert.Equal(amount, result.Amount);
+
+            // Verify that the cache set was invoked
+            _cacheMock.Verify(x => x.CreateEntry(It.IsAny<object>()), Times.Once);
+        }
+
+
+        [Fact]
+        public async Task ConvertCurrency_ReturnsError_WhenCurrenciesAreExcluded()
+        {
+            // Arrange
+            var fromCurrency = "TRY"; // Excluded currency
+            var toCurrency = "USD";
+            var amount = 10.0m;
+
+            // Act
+            var result = await _currencyConverterService.ConvertCurrency(fromCurrency, toCurrency, amount);
+
+            // Assert
+            Assert.False(result.Success);
+            Assert.Equal(400, result.StatusCode);
+            Assert.Equal("Conversion between the specified currencies is not allowed.", result.ErrorMessage);
+        }
+
+        [Fact]
+        public async Task ConvertCurrency_ReturnsError_WhenApiCallFails()
+        {
+            // Arrange
+            var fromCurrency = "GBP";
+            var toCurrency = "USD";
+            var amount = 10.0m;
+
+            var cacheKey = $"CurrencyConversion-{fromCurrency}-{toCurrency}-{amount}";
+
+            var responseMessage = new HttpResponseMessage(HttpStatusCode.BadRequest); // Simulate failed API call
+
+            object cacheValue = null; // Simulate cache miss
+            _cacheMock.Setup(x => x.TryGetValue(cacheKey, out cacheValue)).Returns(false); // Cache miss
+
+            // Mock HttpClient behavior
+            var httpClient = new HttpClient(new MockHttpMessageHandler(responseMessage))
+            {
+                BaseAddress = new Uri("https://api.frankfurter.app/")
+            };
+            _httpClientFactoryMock.Setup(x => x.CreateClient("FrankfurterApi")).Returns(httpClient);
+
+            // Act
+            var result = await _currencyConverterService.ConvertCurrency(fromCurrency, toCurrency, amount);
+
+            // Assert
+            Assert.False(result.Success);
+            Assert.Equal(500, result.StatusCode);
+            Assert.Equal("Error fetching conversion rates.", result.ErrorMessage);
+        }
+
     }
 
     // MockHttpMessageHandler that always returns the predefined response

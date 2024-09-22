@@ -14,6 +14,7 @@ namespace CurrencyConverterApp.API.Services
 
         //private readonly IDistributedCache _cache;
         readonly ILogger<CurrencyConverterService> _logger;
+        private readonly string[] _excludedCurrencies = { "TRY", "PLN", "THB", "MXN" };  // Currencies to exclude
 
         public CurrencyConverterService(IHttpClientFactory httpClientFactory, IMemoryCache cache, ILogger<CurrencyConverterService> logger)
         {
@@ -55,7 +56,7 @@ namespace CurrencyConverterApp.API.Services
                 }
 
                 _logger.LogError($"Failed to fetch exchange rates for {BaseCurrency}");
-                throw new HttpRequestException("Error Fetching data from frankfurter API");
+                throw new HttpRequestException("Error Fetching data from frankfurter API "+ response.ReasonPhrase);
             }
             catch (Exception ex)
             {
@@ -67,6 +68,128 @@ namespace CurrencyConverterApp.API.Services
 
 
         }
+
+
+        // Method for converting amounts between different currencies
+        public async Task<CurrencyConversionResponse> ConvertCurrency(string fromCurrency, string toCurrency, decimal amount)
+        {
+            // Check if the requested currencies are in the excluded list
+            if (_excludedCurrencies.Contains(fromCurrency) || _excludedCurrencies.Contains(toCurrency))
+            {
+                return new CurrencyConversionResponse
+                {
+                    Success = false,
+                    ErrorMessage = "Conversion between the specified currencies is not allowed.",
+                    StatusCode = 400
+                };
+            }
+            var cacheKey = $"CurrencyConversion-{fromCurrency}-{toCurrency}-{amount}";
+            if (_cache.TryGetValue(cacheKey, out CurrencyConversionResponse cachedConversion))
+            {
+                return cachedConversion;
+            }
+
+            var client = _httpClientFactory.CreateClient("FrankfurterApi");
+
+            // API call to get the conversion rate
+            //amount=10&from=GBP&to=USD
+
+            var response = await client.GetAsync($"latest?amount={amount}&from={fromCurrency}&to={toCurrency}");
+
+            if (response.IsSuccessStatusCode)
+            {
+                var content = await response.Content.ReadAsStringAsync();
+                //{"amount":10.0,"base":"GBP","date":"2024-09-20","rates":{"USD":13.3071}}
+                var rates = JsonConvert.DeserializeObject<ExchangeRatesResponse>(content);
+
+                var convertedAmount = rates.Rates[toCurrency];
+
+                var conversionResult = new CurrencyConversionResponse
+                {
+                    Success = true,
+                    ConvertedAmount = convertedAmount,
+                    FromCurrency = fromCurrency,
+                    ToCurrency = toCurrency,
+                    Amount = amount,
+                    //ConversionRate = conversionRate
+                };
+
+                // Store the result in memory cache
+                _cache.Set(cacheKey, conversionResult, new MemoryCacheEntryOptions
+                {
+                    AbsoluteExpirationRelativeToNow = CalculateTimeUntilNextRefresh()
+                });
+
+                return conversionResult;
+            }
+
+            _logger.LogError($"Failed to convert currency from {fromCurrency} to {toCurrency}");
+            return new CurrencyConversionResponse
+            {
+                Success = false,
+                ErrorMessage = "Error fetching conversion rates.",
+                StatusCode = 500
+            };
+        }
+
+        // Method to fetch historical exchange rates with pagination
+        public async Task<PaginatedHistoricalRatesResponse> GetHistoricalRates(string baseCurrency, DateTime startDate, DateTime endDate, int pageNumber, int pageSize)
+        {
+            var client = _httpClientFactory.CreateClient("FrankfurterApi");
+
+            // Create cache key
+            var cacheKey = $"HistoricalRates-{baseCurrency}-{startDate.ToShortDateString()}-{endDate.ToShortDateString()}-{pageNumber}-{pageSize}";
+
+            // Try to get cached result
+            if (_cache.TryGetValue(cacheKey, out PaginatedHistoricalRatesResponse cachedRates))
+            {
+                return cachedRates;
+            }
+
+            // Fetch historical rates from the API
+            var response = await client.GetAsync($"https://api.frankfurter.app/{startDate:yyyy-MM-dd}..{endDate:yyyy-MM-dd}?base={baseCurrency}");
+
+            if (response.IsSuccessStatusCode)
+            {
+                var content = await response.Content.ReadAsStringAsync();
+                var ratesResponse = JsonConvert.DeserializeObject<HistoricalRatesResponse>(content);
+
+                // Perform pagination
+                var paginatedResult = PaginateRates(ratesResponse.Rates, pageNumber, pageSize);
+
+                // Cache the result for future use
+                _cache.Set(cacheKey, paginatedResult, TimeSpan.FromHours(1));
+
+                return paginatedResult;
+            }
+
+            _logger.LogError($"Failed to fetch historical rates for {baseCurrency}");
+            return new PaginatedHistoricalRatesResponse
+            {
+                Success = false,
+                ErrorMessage = "Error fetching historical rates."
+            };
+        }
+
+        // Helper method to perform pagination on the result
+        private PaginatedHistoricalRatesResponse PaginateRates(Dictionary<DateTime, Dictionary<string, decimal>> rates, int pageNumber, int pageSize)
+        {
+            var paginatedRates = rates
+                .OrderBy(r => r.Key)
+                .Skip((pageNumber - 1) * pageSize)
+                .Take(pageSize)
+                .ToDictionary(x => x.Key, x => x.Value);
+
+            return new PaginatedHistoricalRatesResponse
+            {
+                Success = true,
+                PageNumber = pageNumber,
+                PageSize = pageSize,
+                TotalCount = rates.Count,
+                Rates = paginatedRates
+            };
+        }
+
 
         private TimeSpan CalculateTimeUntilNextRefresh()
         {
